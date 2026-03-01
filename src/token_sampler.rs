@@ -18,6 +18,18 @@ struct TokenSeparater {
 }
 
 impl TokenSeparater {
+    fn find_added_token(config_json: &Value, content: &str) -> Option<(u32, String)> {
+        let decoder = config_json.get("added_tokens_decoder")?.as_object()?;
+        decoder.iter().find_map(|(id, token)| {
+            let token_content = token.get("content")?.as_str()?;
+            if token_content == content {
+                Some((id.parse::<u32>().ok()?, token_content.to_owned()))
+            } else {
+                None
+            }
+        })
+    }
+
     pub fn new(path: &str) -> Self {
         let data = fs::read_to_string(path).expect("Failed to read tokenizer config file");
         let config_json: Value =
@@ -66,11 +78,24 @@ impl TokenSeparater {
                     eos_token: (151645, "<|im_end|>".to_owned()),
                     pad_token: (151643, "<|endoftext|>".to_owned()),
                 };
+            } else if class.as_str() == Some("PreTrainedTokenizerFast") {
+                let bos_token = Self::find_added_token(&config_json, "<|begin_of_text|>")
+                    .expect("Llama tokenizer missing <|begin_of_text|> token");
+                let eos_token = Self::find_added_token(&config_json, "<|end_of_text|>")
+                    .expect("Llama tokenizer missing <|end_of_text|> token");
+                let pad_token = Self::find_added_token(&config_json, "<|finetune_right_pad_id|>")
+                    .unwrap_or_else(|| eos_token.clone());
+
+                return TokenSeparater {
+                    bos_token,
+                    eos_token,
+                    pad_token,
+                };
             } else {
-                unimplemented!("Currently support Qwen2/Qwen2.5 class model");
+                unimplemented!("Currently support Qwen2/Qwen2.5 and Llama-3.1 class model");
             }
         } else {
-            unimplemented!("Currently support Qwen2/Qwen2.5 class model");
+            unimplemented!("Currently support Qwen2/Qwen2.5 and Llama-3.1 class model");
         }
     }
 }
@@ -97,7 +122,12 @@ impl BatchSampleContext {
         let begin = 0;
         let rng = rand::thread_rng();
 
-        let mut ctx = Self { tokens, begin, batch_size, rng };
+        let mut ctx = Self {
+            tokens,
+            begin,
+            batch_size,
+            rng,
+        };
         ctx.reload(tokenizer);
 
         ctx
@@ -107,8 +137,9 @@ impl BatchSampleContext {
         // Continuously reload Batchsampler
         let vocab_size = tokenizer.get_vocab_size(true) as u32;
 
-        let tokens: Vec<u32> =
-            (0..self.batch_size).map(|_| self.rng.gen_range(0..vocab_size)).collect();
+        let tokens: Vec<u32> = (0..self.batch_size)
+            .map(|_| self.rng.gen_range(0..vocab_size))
+            .collect();
         let dec = tokenizer.decode(&tokens, false).unwrap_or_default();
         let enc = tokenizer.encode(dec, false).unwrap();
         self.tokens = enc.get_ids().to_owned();
@@ -174,7 +205,13 @@ impl TokenSampler {
         }
         tracing::info!("Warmup finished!");
 
-        Self { tokenizer, block_size, fst_rx, snd_cmd_tx, snd_data_rxs }
+        Self {
+            tokenizer,
+            block_size,
+            fst_rx,
+            snd_cmd_tx,
+            snd_data_rxs,
+        }
     }
 
     #[allow(unused)]
@@ -288,7 +325,11 @@ impl TokenSampler {
             }
 
             // verify the length
-            let reencoded_len = tokenizer.encode(result.clone(), false).unwrap().get_ids().len();
+            let reencoded_len = tokenizer
+                .encode(result.clone(), false)
+                .unwrap()
+                .get_ids()
+                .len();
             if reencoded_len == n {
                 // let duration = generate_time.elapsed();
                 // tracing::info!("Generated block of size {n} in {duration:?}");
@@ -443,7 +484,11 @@ impl TokenSampler {
                 asm_tokens.extend_from_slice(tokens);
                 asm_tokens.push(sep.eos_token.0);
                 let result = tokenizer.decode(&asm_tokens, false).unwrap_or_default();
-                let validate_len = tokenizer.encode(result.clone(), false).unwrap().get_ids().len();
+                let validate_len = tokenizer
+                    .encode(result.clone(), false)
+                    .unwrap()
+                    .get_ids()
+                    .len();
                 if validate_len < n {
                     miss += 1;
                     end += 1;
@@ -494,7 +539,9 @@ impl TokenSampler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::time::Instant;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     const QWEN2_EOS_TOKEN: u32 = 151645;
     const QWEN2_BOS_TOKEN: u32 = 151644;
@@ -508,7 +555,9 @@ mod tests {
     ) -> (String, usize) {
         let mut rng = rand::thread_rng();
         let vocab_size = tokenizer.get_vocab_size(true) as u32;
-        let tokens: Vec<u32> = (0..2 * size).map(|_| rng.gen_range(0..vocab_size)).collect();
+        let tokens: Vec<u32> = (0..2 * size)
+            .map(|_| rng.gen_range(0..vocab_size))
+            .collect();
         let decoded = tokenizer.decode(&tokens, false).unwrap_or_default();
         let encoded = tokenizer.encode(decoded, false).unwrap();
         let mut all_tokens = encoded.get_ids().to_vec();
@@ -528,8 +577,11 @@ mod tests {
                 asm_tokens.extend_from_slice(tokens);
                 asm_tokens.push(QWEN2_EOS_TOKEN);
                 let result = tokenizer.decode(&asm_tokens, false).unwrap_or_default();
-                let reencoded_len =
-                    tokenizer.encode(result.clone(), false).unwrap().get_ids().len();
+                let reencoded_len = tokenizer
+                    .encode(result.clone(), false)
+                    .unwrap()
+                    .get_ids()
+                    .len();
                 if reencoded_len < stride {
                     miss += 1;
                     end += 1;
@@ -581,8 +633,11 @@ mod tests {
                 let (result, cnt) = validate_block_generation(&tokenizer, 2048, stride);
                 let elapsed = start.elapsed();
                 let elapsed_ms = (elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0; // keep two decimal places
-                let reencoded_len =
-                    tokenizer.encode(result.clone(), false).unwrap().get_ids().len();
+                let reencoded_len = tokenizer
+                    .encode(result.clone(), false)
+                    .unwrap()
+                    .get_ids()
+                    .len();
                 let s = if reencoded_len == cnt * 16 {
                     "OK"
                 } else {
@@ -595,6 +650,65 @@ mod tests {
             }
         }
         println!("--------------------------------");
-        println!("Speed: {:<4}ms/block | block size: {stride}", total_elapsed / total_cnt as f64);
+        println!(
+            "Speed: {:<4}ms/block | block size: {stride}",
+            total_elapsed / total_cnt as f64
+        );
+    }
+
+    fn write_temp_tokenizer_config(contents: &str) -> PathBuf {
+        let filename = format!(
+            "tokenizer_config_{}_{}.json",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let path = std::env::temp_dir().join(filename);
+        fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[test]
+    fn test_token_separator_supports_llama31_instruct() {
+        let config = r#"{
+            "tokenizer_class": "PreTrainedTokenizerFast",
+            "added_tokens_decoder": {
+                "128000": {"content": "<|begin_of_text|>"},
+                "128001": {"content": "<|end_of_text|>"},
+                "128004": {"content": "<|finetune_right_pad_id|>"}
+            }
+        }"#;
+
+        let path = write_temp_tokenizer_config(config);
+        let sep = TokenSeparater::new(path.to_str().unwrap());
+
+        assert_eq!(sep.bos_token, (128000, "<|begin_of_text|>".to_owned()));
+        assert_eq!(sep.eos_token, (128001, "<|end_of_text|>".to_owned()));
+        assert_eq!(
+            sep.pad_token,
+            (128004, "<|finetune_right_pad_id|>".to_owned())
+        );
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_token_separator_llama_fallback_pad_to_eos() {
+        let config = r#"{
+            "tokenizer_class": "PreTrainedTokenizerFast",
+            "added_tokens_decoder": {
+                "128000": {"content": "<|begin_of_text|>"},
+                "128001": {"content": "<|end_of_text|>"}
+            }
+        }"#;
+
+        let path = write_temp_tokenizer_config(config);
+        let sep = TokenSeparater::new(path.to_str().unwrap());
+
+        assert_eq!(sep.pad_token, sep.eos_token);
+
+        fs::remove_file(path).unwrap();
     }
 }
