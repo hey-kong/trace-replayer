@@ -18,6 +18,13 @@ struct TokenSeparater {
 }
 
 impl TokenSeparater {
+    fn parse_token_id(token_value: &Value) -> Option<u32> {
+        token_value
+            .as_u64()
+            .and_then(|id| u32::try_from(id).ok())
+            .or_else(|| token_value.as_str()?.parse::<u32>().ok())
+    }
+
     fn find_added_token(config_json: &Value, content: &str) -> Option<(u32, String)> {
         let decoder = config_json.get("added_tokens_decoder")?.as_object()?;
         decoder.iter().find_map(|(id, token)| {
@@ -35,54 +42,57 @@ impl TokenSeparater {
         Self::find_added_token(config_json, token_content)
     }
 
+    fn find_special_token_id(config_json: &Value, field: &str) -> Option<u32> {
+        Self::parse_token_id(config_json.get(field)?)
+    }
+
+    fn qwen_tokens(config_json: &Value) -> Option<Self> {
+        let pad_token = Self::find_special_token(config_json, "pad_token")
+            .or_else(|| Self::find_added_token(config_json, "<|endoftext|>"))
+            .or_else(|| {
+                Self::find_special_token_id(config_json, "pad_token_id")
+                    .map(|id| (id, "<|endoftext|>".to_owned()))
+            })?;
+
+        let bos_token = Self::find_special_token(config_json, "bos_token")
+            .or_else(|| Self::find_added_token(config_json, "<|im_start|>"))
+            .or_else(|| {
+                Self::find_special_token_id(config_json, "bos_token_id")
+                    .map(|id| (id, "<|im_start|>".to_owned()))
+            })?;
+
+        let eos_token = Self::find_special_token(config_json, "eos_token")
+            .or_else(|| Self::find_added_token(config_json, "<|im_end|>"))
+            .or_else(|| {
+                Self::find_special_token_id(config_json, "eos_token_id")
+                    .map(|id| (id, "<|im_end|>".to_owned()))
+            })?;
+
+        Some(Self {
+            bos_token,
+            eos_token,
+            pad_token,
+        })
+    }
+
     pub fn new(path: &str) -> Self {
         let data = fs::read_to_string(path).expect("Failed to read tokenizer config file");
         let config_json: Value =
             serde_json::from_str(&data).expect("Failed to parse tokenizer config file as JSON");
 
         if let Some(class) = config_json.get("tokenizer_class") {
-            if class.as_str() == Some("Qwen2Tokenizer") {
-                assert_eq!(
-                    config_json
-                        .get("added_tokens_decoder")
-                        .unwrap()
-                        .get("151643")
-                        .unwrap()
-                        .get("content")
-                        .unwrap()
-                        .as_str()
-                        .unwrap(),
-                    "<|endoftext|>"
-                );
-                assert_eq!(
-                    config_json
-                        .get("added_tokens_decoder")
-                        .unwrap()
-                        .get("151644")
-                        .unwrap()
-                        .get("content")
-                        .unwrap()
-                        .as_str()
-                        .unwrap(),
-                    "<|im_start|>"
-                );
-                assert_eq!(
-                    config_json
-                        .get("added_tokens_decoder")
-                        .unwrap()
-                        .get("151645")
-                        .unwrap()
-                        .get("content")
-                        .unwrap()
-                        .as_str()
-                        .unwrap(),
-                    "<|im_end|>"
-                );
-                return TokenSeparater {
-                    bos_token: (151644, "<|im_start|>".to_owned()),
-                    eos_token: (151645, "<|im_end|>".to_owned()),
-                    pad_token: (151643, "<|endoftext|>".to_owned()),
-                };
+            if matches!(
+                class.as_str(),
+                Some("Qwen2Tokenizer")
+                    | Some("Qwen2TokenizerFast")
+                    | Some("Qwen3Tokenizer")
+                    | Some("Qwen3TokenizerFast")
+            ) {
+                if let Some(tokens) = Self::qwen_tokens(&config_json) {
+                    return tokens;
+                }
+
+                unimplemented!("Qwen tokenizer config is missing required special tokens");
             } else if class.as_str() == Some("PreTrainedTokenizerFast") {
                 let bos_token = Self::find_added_token(&config_json, "<|begin_of_text|>")
                     .expect("Llama tokenizer missing <|begin_of_text|> token");
@@ -111,12 +121,12 @@ impl TokenSeparater {
                 };
             } else {
                 unimplemented!(
-                    "Currently support Qwen2/Qwen2.5, Llama-3.1 and Mistral-Small-24B-Instruct-2501 class model"
+                    "Currently support Qwen2/Qwen2.5/Qwen3, Llama-3.1 and Mistral-Small-24B-Instruct-2501 class model"
                 );
             }
         } else {
             unimplemented!(
-                "Currently support Qwen2/Qwen2.5, Llama-3.1 and Mistral-Small-24B-Instruct-2501 class model"
+                "Currently support Qwen2/Qwen2.5/Qwen3, Llama-3.1 and Mistral-Small-24B-Instruct-2501 class model"
             );
         }
     }
@@ -752,6 +762,30 @@ mod tests {
         assert_eq!(sep.bos_token, (1, "<s>".to_owned()));
         assert_eq!(sep.eos_token, (2, "</s>".to_owned()));
         assert_eq!(sep.pad_token, sep.eos_token);
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_token_separator_supports_qwen3_14b() {
+        let config = r#"{
+            "tokenizer_class": "Qwen3Tokenizer",
+            "bos_token": "<|im_start|>",
+            "eos_token": "<|im_end|>",
+            "pad_token": "<|endoftext|>",
+            "added_tokens_decoder": {
+                "151643": {"content": "<|endoftext|>"},
+                "151644": {"content": "<|im_start|>"},
+                "151645": {"content": "<|im_end|>"}
+            }
+        }"#;
+
+        let path = write_temp_tokenizer_config(config);
+        let sep = TokenSeparater::new(path.to_str().unwrap());
+
+        assert_eq!(sep.bos_token, (151644, "<|im_start|>".to_owned()));
+        assert_eq!(sep.eos_token, (151645, "<|im_end|>".to_owned()));
+        assert_eq!(sep.pad_token, (151643, "<|endoftext|>".to_owned()));
 
         fs::remove_file(path).unwrap();
     }
