@@ -30,6 +30,11 @@ impl TokenSeparater {
         })
     }
 
+    fn find_special_token(config_json: &Value, field: &str) -> Option<(u32, String)> {
+        let token_content = config_json.get(field)?.as_str()?;
+        Self::find_added_token(config_json, token_content)
+    }
+
     pub fn new(path: &str) -> Self {
         let data = fs::read_to_string(path).expect("Failed to read tokenizer config file");
         let config_json: Value =
@@ -91,11 +96,28 @@ impl TokenSeparater {
                     eos_token,
                     pad_token,
                 };
+            } else if class.as_str() == Some("MistralCommonTokenizer") {
+                let bos_token = Self::find_special_token(&config_json, "bos_token")
+                    .unwrap_or_else(|| (1, "<s>".to_owned()));
+                let eos_token = Self::find_special_token(&config_json, "eos_token")
+                    .unwrap_or_else(|| (2, "</s>".to_owned()));
+                let pad_token = Self::find_special_token(&config_json, "pad_token")
+                    .unwrap_or_else(|| eos_token.clone());
+
+                return TokenSeparater {
+                    bos_token,
+                    eos_token,
+                    pad_token,
+                };
             } else {
-                unimplemented!("Currently support Qwen2/Qwen2.5 and Llama-3.1 class model");
+                unimplemented!(
+                    "Currently support Qwen2/Qwen2.5, Llama-3.1 and Mistral-Small-24B-Instruct-2501 class model"
+                );
             }
         } else {
-            unimplemented!("Currently support Qwen2/Qwen2.5 and Llama-3.1 class model");
+            unimplemented!(
+                "Currently support Qwen2/Qwen2.5, Llama-3.1 and Mistral-Small-24B-Instruct-2501 class model"
+            );
         }
     }
 }
@@ -707,6 +729,46 @@ mod tests {
         let path = write_temp_tokenizer_config(config);
         let sep = TokenSeparater::new(path.to_str().unwrap());
 
+        assert_eq!(sep.pad_token, sep.eos_token);
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_token_separator_supports_mistral_small_24b_instruct_2501() {
+        let config = r#"{
+            "tokenizer_class": "MistralCommonTokenizer",
+            "bos_token": "<s>",
+            "eos_token": "</s>",
+            "added_tokens_decoder": {
+                "1": {"content": "<s>"},
+                "2": {"content": "</s>"}
+            }
+        }"#;
+
+        let path = write_temp_tokenizer_config(config);
+        let sep = TokenSeparater::new(path.to_str().unwrap());
+
+        assert_eq!(sep.bos_token, (1, "<s>".to_owned()));
+        assert_eq!(sep.eos_token, (2, "</s>".to_owned()));
+        assert_eq!(sep.pad_token, sep.eos_token);
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_token_separator_mistral_fallback_without_added_tokens_decoder() {
+        let config = r#"{
+            "tokenizer_class": "MistralCommonTokenizer",
+            "bos_token": "<s>",
+            "eos_token": "</s>"
+        }"#;
+
+        let path = write_temp_tokenizer_config(config);
+        let sep = TokenSeparater::new(path.to_str().unwrap());
+
+        assert_eq!(sep.bos_token, (1, "<s>".to_owned()));
+        assert_eq!(sep.eos_token, (2, "</s>".to_owned()));
         assert_eq!(sep.pad_token, sep.eos_token);
 
         fs::remove_file(path).unwrap();
