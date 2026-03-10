@@ -75,6 +75,50 @@ impl TokenSeparater {
         })
     }
 
+    fn mistral_tokens(config_json: &Value) -> Option<Self> {
+        // Prefer canonical Mistral sentence boundary tokens over chat-template wrappers.
+        // Some instruct checkpoints expose `<s>[INST]` / `[/INST]` in tokenizer fields,
+        // but those are conversation delimiters instead of true BOS/EOS boundaries.
+        let bos_token = Self::find_added_token(config_json, "<s>")
+            .or_else(|| {
+                let token = Self::find_special_token(config_json, "bos_token")?;
+                if token.1 == "<s>" {
+                    Some(token)
+                } else {
+                    None
+                }
+            })
+            .or_else(|| Self::find_added_token(config_json, "<s>"))
+            .or_else(|| Self::find_special_token_id(config_json, "bos_token_id").map(|id| (id, "<s>".to_owned())))
+            .or_else(|| Self::find_special_token(config_json, "bos_token"))
+            .unwrap_or_else(|| (1, "<s>".to_owned()));
+
+        let eos_token = Self::find_added_token(config_json, "</s>")
+            .or_else(|| {
+                let token = Self::find_special_token(config_json, "eos_token")?;
+                if token.1 == "</s>" {
+                    Some(token)
+                } else {
+                    None
+                }
+            })
+            .or_else(|| Self::find_added_token(config_json, "</s>"))
+            .or_else(|| Self::find_special_token_id(config_json, "eos_token_id").map(|id| (id, "</s>".to_owned())))
+            .or_else(|| Self::find_special_token(config_json, "eos_token"))
+            .unwrap_or_else(|| (2, "</s>".to_owned()));
+
+        let pad_token = Self::find_special_token(config_json, "pad_token")
+            .or_else(|| Self::find_added_token(config_json, "<pad>"))
+            .or_else(|| Self::find_special_token_id(config_json, "pad_token_id").map(|id| (id, "<pad>".to_owned())))
+            .unwrap_or_else(|| eos_token.clone());
+
+        Some(Self {
+            bos_token,
+            eos_token,
+            pad_token,
+        })
+    }
+
     pub fn new(path: &str) -> Self {
         let data = fs::read_to_string(path).expect("Failed to read tokenizer config file");
         let config_json: Value =
@@ -106,25 +150,29 @@ impl TokenSeparater {
                     eos_token,
                     pad_token,
                 };
-            } else if class.as_str() == Some("MistralCommonTokenizer") {
-                let bos_token = Self::find_special_token(&config_json, "bos_token")
-                    .unwrap_or_else(|| (1, "<s>".to_owned()));
-                let eos_token = Self::find_special_token(&config_json, "eos_token")
-                    .unwrap_or_else(|| (2, "</s>".to_owned()));
-                let pad_token = Self::find_special_token(&config_json, "pad_token")
-                    .unwrap_or_else(|| eos_token.clone());
-
-                return TokenSeparater {
-                    bos_token,
-                    eos_token,
-                    pad_token,
-                };
+            } else if matches!(
+                class.as_str(),
+                Some("MistralCommonTokenizer")
+                    | Some("Tekkenizer")
+                    | Some("TekkenTokenizer")
+            ) {
+                if let Some(tokens) = Self::mistral_tokens(&config_json) {
+                    return tokens;
+                }
             } else {
-                unimplemented!(
-                    "Currently support Qwen2/Qwen2.5/Qwen3, Llama-3.1 and Mistral-Small-24B-Instruct-2501 class model"
-                );
+                // Mistral tokenizer_class can vary across checkpoints and serving stacks.
+                // Fall back to token-content based detection before failing hard.
+                if let Some(tokens) = Self::mistral_tokens(&config_json) {
+                    return tokens;
+                }
             }
+            unimplemented!(
+                "Currently support Qwen2/Qwen2.5/Qwen3, Llama-3.1 and Mistral-Small-24B-Instruct-2501 class model"
+            );
         } else {
+            if let Some(tokens) = Self::mistral_tokens(&config_json) {
+                return tokens;
+            }
             unimplemented!(
                 "Currently support Qwen2/Qwen2.5/Qwen3, Llama-3.1 and Mistral-Small-24B-Instruct-2501 class model"
             );
@@ -804,6 +852,29 @@ mod tests {
         assert_eq!(sep.bos_token, (1, "<s>".to_owned()));
         assert_eq!(sep.eos_token, (2, "</s>".to_owned()));
         assert_eq!(sep.pad_token, sep.eos_token);
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_token_separator_mistral_prefers_canonical_sentence_boundaries() {
+        let config = r#"{
+            "tokenizer_class": "Tekkenizer",
+            "bos_token": "<s>[INST]",
+            "eos_token": "[/INST]",
+            "added_tokens_decoder": {
+                "1": {"content": "<s>"},
+                "2": {"content": "</s>"},
+                "3": {"content": "<s>[INST]"},
+                "4": {"content": "[/INST]"}
+            }
+        }"#;
+
+        let path = write_temp_tokenizer_config(config);
+        let sep = TokenSeparater::new(path.to_str().unwrap());
+
+        assert_eq!(sep.bos_token, (1, "<s>".to_owned()));
+        assert_eq!(sep.eos_token, (2, "</s>".to_owned()));
 
         fs::remove_file(path).unwrap();
     }
