@@ -79,6 +79,7 @@ pub fn spawn_request_loop_with_timestamp<A: 'static + LLMApi + Send>(
     dataset: Arc<Pin<Box<dyn LLMTrace>>>,
     token_sampler: Arc<TokenSampler>,
     scale_factor: f64,
+    ignore_trace_timestamp: bool,
     response_sender: flume::Sender<BTreeMap<String, String>>,
     interrupt_flag: Arc<AtomicBool>,
     ttft_slo: f32,
@@ -142,15 +143,91 @@ pub fn spawn_request_loop_with_timestamp<A: 'static + LLMApi + Send>(
             let response_sender = response_sender.clone();
 
             let curr_timestamp = get_timestamp() as u64;
-            let next_timestamp = ((*dataset).timestamp(data_index) as f64 / scale_factor) as u64;
+            let next_timestamp = if ignore_trace_timestamp {
+                curr_timestamp
+            } else {
+                ((*dataset).timestamp(data_index) as f64 / scale_factor) as u64
+            };
 
-            if next_timestamp > curr_timestamp + 1 {
+            if !ignore_trace_timestamp && next_timestamp > curr_timestamp + 1 {
                 sleep(Duration::from_millis(next_timestamp - curr_timestamp)).await;
             }
 
             // Do not parse in another coroutine to avoid sync/async lock contention
             let (prompt, input_length, output_length) =
                 dataset.inflate(data_index, token_sampler.as_ref());
+
+            if ignore_trace_timestamp {
+                let json_body = A::request_json_body(prompt, output_length, stream);
+                let s_time = get_timestamp();
+                let s_time_drift = s_time - next_timestamp as f64;
+                match post_with_timeout::<A>(
+                    client,
+                    endpoint.as_str(),
+                    json_body.to_string(),
+                    Duration::from_secs(timeout_secs_upon_slo(output_length, ttft_slo, tpot_slo)),
+                    stream,
+                )
+                .await
+                {
+                    Ok(mut metrics) => {
+                        let e_time = get_timestamp();
+
+                        metrics.insert("s_time".to_string(), format!("{s_time:.3}"));
+                        metrics.insert("s_time_s".to_string(), format!("{:.3}", s_time / 1000.0));
+                        metrics.insert("s_time_drift".to_string(), format!("{s_time_drift:.3}"));
+                        metrics.insert("e_time".to_string(), format!("{e_time:.3}"));
+                        metrics.insert("e_time_s".to_string(), format!("{:.3}", e_time / 1000.0));
+                        metrics.insert("input_length".to_string(), input_length.to_string());
+                        metrics.insert("output_length".to_string(), output_length.to_string());
+
+                        let span_time = e_time - s_time;
+                        metrics.insert("span_time".to_string(), format!("{span_time:.3}"));
+                        metrics.insert(
+                            "span_time_s".to_string(),
+                            format!("{:.3}", span_time / 1000.0),
+                        );
+                        response_sender.send(metrics).unwrap();
+                    }
+                    Err(RequestError::Timeout) => {
+                        let e_time = get_timestamp();
+
+                        let mut metrics = BTreeMap::<String, String>::from([(
+                            "status".to_owned(),
+                            "timeout".to_owned(),
+                        )]);
+                        metrics.insert("s_time".to_string(), format!("{s_time:.3}"));
+                        metrics.insert("s_time_s".to_string(), format!("{:.3}", s_time / 1000.0));
+                        metrics.insert("s_time_drift".to_string(), format!("{s_time_drift:.3}"));
+                        metrics.insert("e_time".to_string(), format!("{e_time:.3}"));
+                        metrics.insert("e_time_s".to_string(), format!("{:.3}", e_time / 1000.0));
+                        metrics.insert("input_length".to_string(), input_length.to_string());
+                        metrics.insert("output_length".to_string(), output_length.to_string());
+
+                        let span_time = e_time - s_time;
+                        metrics.insert("span_time".to_string(), format!("{span_time:.3}"));
+                        metrics.insert(
+                            "span_time_s".to_string(),
+                            format!("{:.3}", span_time / 1000.0),
+                        );
+                        response_sender.send(metrics).unwrap();
+                        error_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(RequestError::Other(error)) => {
+                        tracing::error!(
+                            "Request#{data_index}::({input_length}|{output_length}) error: {error}",
+                        );
+                        error_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(RequestError::StreamErr(error)) => {
+                        tracing::error!(
+                            "Request#{data_index}::({input_length}|{output_length}) stream error: {error}",
+                        );
+                        error_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                continue;
+            }
 
             let request_handle = spawn(async move {
                 let json_body = A::request_json_body(prompt, output_length, stream);
@@ -169,15 +246,18 @@ pub fn spawn_request_loop_with_timestamp<A: 'static + LLMApi + Send>(
                         let e_time = get_timestamp();
 
                         metrics.insert("s_time".to_string(), format!("{s_time:.3}"));
+                        metrics.insert("s_time_s".to_string(), format!("{:.3}", s_time / 1000.0));
                         metrics.insert("s_time_drift".to_string(), format!("{s_time_drift:.3}"));
                         metrics.insert("e_time".to_string(), format!("{e_time:.3}"));
+                        metrics.insert("e_time_s".to_string(), format!("{:.3}", e_time / 1000.0));
                         metrics.insert("input_length".to_string(), input_length.to_string());
                         metrics.insert("output_length".to_string(), output_length.to_string());
 
                         let span_time = e_time - s_time;
+                        metrics.insert("span_time".to_string(), format!("{span_time:.3}"));
                         metrics.insert(
-                            "span_time".to_string(),
-                            format!("{span_time:.3}"),
+                            "span_time_s".to_string(),
+                            format!("{:.3}", span_time / 1000.0),
                         );
                         response_sender.send(metrics).unwrap();
                     }
@@ -189,15 +269,18 @@ pub fn spawn_request_loop_with_timestamp<A: 'static + LLMApi + Send>(
                             "timeout".to_owned(),
                         )]);
                         metrics.insert("s_time".to_string(), format!("{s_time:.3}"));
+                        metrics.insert("s_time_s".to_string(), format!("{:.3}", s_time / 1000.0));
                         metrics.insert("s_time_drift".to_string(), format!("{s_time_drift:.3}"));
                         metrics.insert("e_time".to_string(), format!("{e_time:.3}"));
+                        metrics.insert("e_time_s".to_string(), format!("{:.3}", e_time / 1000.0));
                         metrics.insert("input_length".to_string(), input_length.to_string());
                         metrics.insert("output_length".to_string(), output_length.to_string());
 
                         let span_time = e_time - s_time;
+                        metrics.insert("span_time".to_string(), format!("{span_time:.3}"));
                         metrics.insert(
-                            "span_time".to_string(),
-                            format!("{span_time:.3}"),
+                            "span_time_s".to_string(),
+                            format!("{:.3}", span_time / 1000.0),
                         );
                         response_sender.send(metrics).unwrap();
                         error_count.fetch_add(1, Ordering::Relaxed);
@@ -391,7 +474,9 @@ impl SummaryStats {
             self.ttft_values.push(ttft);
         }
         if let (Some(total_time), Some(output_length)) = (
-            metrics.get("total_time").and_then(|v| v.parse::<f64>().ok()),
+            metrics
+                .get("total_time")
+                .and_then(|v| v.parse::<f64>().ok()),
             metrics
                 .get("output_length")
                 .and_then(|v| v.parse::<f64>().ok()),
@@ -467,10 +552,7 @@ impl SummaryStats {
             "tpot_mean_ms".to_string(),
             format_ms(mean(&self.tpot_values)),
         );
-        summary.insert(
-            "e2e_mean_ms".to_string(),
-            format_ms(mean(&self.e2e_values)),
-        );
+        summary.insert("e2e_mean_ms".to_string(), format_ms(mean(&self.e2e_values)));
 
         Some(summary)
     }

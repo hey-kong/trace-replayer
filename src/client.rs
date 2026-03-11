@@ -67,6 +67,12 @@ struct Args {
     #[clap(long)]
     scale_factor: Option<f64>,
 
+    /// Ignore trace timestamps and send requests sequentially.
+    ///
+    /// When enabled, each request will be sent only after the previous one finishes.
+    #[clap(long, default_value_t = false)]
+    ignore_trace_timestamp: bool,
+
     /// Output path.
     #[clap(long, short, default_value = "./log/output.jsonl")]
     output_path: String,
@@ -123,6 +129,7 @@ async fn async_main(args: Args) -> Result<(), i32> {
         dataset,
         dataset_path,
         scale_factor,
+        ignore_trace_timestamp,
         output_path,
         summary_path,
         tracing_path: _,
@@ -211,6 +218,7 @@ async fn async_main(args: Args) -> Result<(), i32> {
                 dataset,
                 token_sampler,
                 scale_factor.unwrap(),
+                ignore_trace_timestamp,
                 tx,
                 interrupt_flag.clone(),
                 ttft_slo,
@@ -254,6 +262,7 @@ async fn async_main(args: Args) -> Result<(), i32> {
                 dataset,
                 token_sampler,
                 scale_factor.unwrap(),
+                ignore_trace_timestamp,
                 tx,
                 interrupt_flag.clone(),
                 ttft_slo,
@@ -288,6 +297,7 @@ async fn async_main(args: Args) -> Result<(), i32> {
                 dataset,
                 token_sampler,
                 scale_factor.unwrap(),
+                ignore_trace_timestamp,
                 tx,
                 interrupt_flag.clone(),
                 ttft_slo,
@@ -301,26 +311,33 @@ async fn async_main(args: Args) -> Result<(), i32> {
     let reporter_handle = spawn(report_loop(output_file, summary_file, rx));
 
     // start test!
-    tokio::select! {
-        // case 1: time up
-        _ = tokio::time::sleep(tokio::time::Duration::from_secs(time_in_secs)) => {
-            tracing::info!("Test finished by timeout");
-            interrupt_flag.store(true, Ordering::SeqCst);
-        }
-
-        // case 2: interrupt from inner
-        _ = async {
-            // Not the optimal implementation, could be optimized using channel or notify_rx
-            // But for simplicity, we use routinely sleep and wake up
-            while !interrupt_flag.load(Ordering::Relaxed) {
-                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    let ret_val = if ignore_trace_timestamp {
+        tracing::info!(
+            "ignore_trace_timestamp is enabled, --time-in-secs is disabled and all requests will be replayed"
+        );
+        requester_handle.await.unwrap()
+    } else {
+        tokio::select! {
+            // case 1: time up
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(time_in_secs)) => {
+                tracing::info!("Test finished by timeout");
+                interrupt_flag.store(true, Ordering::SeqCst);
             }
-        } => {
-            tracing::error!("Test early stop by interrupt_flag");
-        }
-    }
 
-    let ret_val = requester_handle.await.unwrap();
+            // case 2: interrupt from inner
+            _ = async {
+                // Not the optimal implementation, could be optimized using channel or notify_rx
+                // But for simplicity, we use routinely sleep and wake up
+                while !interrupt_flag.load(Ordering::Relaxed) {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                }
+            } => {
+                tracing::error!("Test early stop by interrupt_flag");
+            }
+        }
+
+        requester_handle.await.unwrap()
+    };
     reporter_handle.await.unwrap();
     return ret_val;
 }

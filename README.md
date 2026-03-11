@@ -121,8 +121,10 @@ Each line in the `.jsonl` file corresponds to one request and may include:
 * `s_time_drift`: Deviation between actual and scheduled send time (ms, expected < 5 ms)
 
   * If too large, consider increasing `num_threads`
-* `s_time`: Request send timestamp
-* `e_time`: Request end timestamp
+* `s_time`: Request send timestamp (ms)
+* `e_time`: Request end timestamp (ms)
+* `s_time_s`: Request send timestamp (s)
+* `e_time_s`: Request end timestamp (s)
 * `input_length`, `output_length`: Input and output token lengths
 * Additional metrics:
 
