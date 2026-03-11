@@ -46,7 +46,7 @@ This document describes all command-line arguments supported by **Trace-Replayer
 
 | Argument               | Type  | Default | Description                           |
 | ---------------------- | ----- | ------- | ------------------------------------- |
-| `--time-in-secs`, `-t` | `u64` | `60`    | Replayer runtime duration in seconds. |
+| `--time-in-secs`, `-t` | `u64` | `60`    | Replayer runtime duration in seconds. Ignored when `--ignore-trace-timestamp` is enabled. |
 | `--early-stop-error-threshold` | Option<u32> | None    | Early stop when timeout requests exceed threshold |
 
 
