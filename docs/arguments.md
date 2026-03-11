@@ -21,6 +21,7 @@ This document describes all command-line arguments supported by **Trace-Replayer
 | Argument         | Type          | Default | Description                                                                                                                                                                                  |
 | ---------------- | ------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--scale-factor` | `Option<f64>` | None    | Request rate scaling factor. For example, `2.0` maps **logical time** in the trace to **physical (wall-clock) time** at 2× speed, issuing more requests within the same wall-clock duration. |
+| `--ignore-trace-timestamp` | `bool` | `false` | Ignore timestamps in the input trace and send requests strictly one-by-one. In this mode, each request is sent only after the previous request finishes. |
 
 
 ## Concurrency & Runtime
