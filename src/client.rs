@@ -67,6 +67,12 @@ struct Args {
     #[clap(long)]
     scale_factor: Option<f64>,
 
+    /// Ignore trace timestamps and send requests sequentially.
+    ///
+    /// When enabled, each request will be sent only after the previous one finishes.
+    #[clap(long, default_value_t = false)]
+    ignore_trace_timestamp: bool,
+
     /// Output path.
     #[clap(long, short, default_value = "./log/output.jsonl")]
     output_path: String,
@@ -123,6 +129,7 @@ async fn async_main(args: Args) -> Result<(), i32> {
         dataset,
         dataset_path,
         scale_factor,
+        ignore_trace_timestamp,
         output_path,
         summary_path,
         tracing_path: _,
@@ -211,6 +218,7 @@ async fn async_main(args: Args) -> Result<(), i32> {
                 dataset,
                 token_sampler,
                 scale_factor.unwrap(),
+                ignore_trace_timestamp,
                 tx,
                 interrupt_flag.clone(),
                 ttft_slo,
@@ -254,6 +262,7 @@ async fn async_main(args: Args) -> Result<(), i32> {
                 dataset,
                 token_sampler,
                 scale_factor.unwrap(),
+                ignore_trace_timestamp,
                 tx,
                 interrupt_flag.clone(),
                 ttft_slo,
@@ -288,6 +297,7 @@ async fn async_main(args: Args) -> Result<(), i32> {
                 dataset,
                 token_sampler,
                 scale_factor.unwrap(),
+                ignore_trace_timestamp,
                 tx,
                 interrupt_flag.clone(),
                 ttft_slo,
