@@ -67,11 +67,11 @@ struct Args {
     #[clap(long)]
     scale_factor: Option<f64>,
 
-    /// Ignore trace timestamps and send requests sequentially.
+    /// Replay requests sequentially.
     ///
-    /// When enabled, each request will be sent only after the previous one finishes.
+    /// When enabled, each request is sent only after the previous one finishes, and trace output_length is forced to 1.
     #[clap(long, default_value_t = false)]
-    ignore_trace_timestamp: bool,
+    sequential: bool,
 
     /// Output path.
     #[clap(long, short, default_value = "./log/output.jsonl")]
@@ -129,7 +129,7 @@ async fn async_main(args: Args) -> Result<(), i32> {
         dataset,
         dataset_path,
         scale_factor,
-        ignore_trace_timestamp,
+        sequential,
         output_path,
         summary_path,
         tracing_path: _,
@@ -218,7 +218,7 @@ async fn async_main(args: Args) -> Result<(), i32> {
                 dataset,
                 token_sampler,
                 scale_factor.unwrap(),
-                ignore_trace_timestamp,
+                sequential,
                 tx,
                 interrupt_flag.clone(),
                 ttft_slo,
@@ -262,7 +262,7 @@ async fn async_main(args: Args) -> Result<(), i32> {
                 dataset,
                 token_sampler,
                 scale_factor.unwrap(),
-                ignore_trace_timestamp,
+                sequential,
                 tx,
                 interrupt_flag.clone(),
                 ttft_slo,
@@ -297,7 +297,7 @@ async fn async_main(args: Args) -> Result<(), i32> {
                 dataset,
                 token_sampler,
                 scale_factor.unwrap(),
-                ignore_trace_timestamp,
+                sequential,
                 tx,
                 interrupt_flag.clone(),
                 ttft_slo,
@@ -311,9 +311,9 @@ async fn async_main(args: Args) -> Result<(), i32> {
     let reporter_handle = spawn(report_loop(output_file, summary_file, rx));
 
     // start test!
-    let ret_val = if ignore_trace_timestamp {
+    let ret_val = if sequential {
         tracing::info!(
-            "ignore_trace_timestamp is enabled, --time-in-secs is disabled and all requests will be replayed"
+            "sequential mode is enabled, --time-in-secs is disabled and all requests will be replayed"
         );
         requester_handle.await.unwrap()
     } else {
