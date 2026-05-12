@@ -8,7 +8,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use futures_util::stream::Count;
 use reqwest::Response;
 use tokio::{
     fs::File,
@@ -74,12 +73,20 @@ async fn wait_all(handle_rx: flume::Receiver<JoinHandle<()>>, interrupt_flag: Ar
     }
 }
 
+fn effective_output_length(trace_output_length: u64, sequential: bool) -> u64 {
+    if sequential {
+        1
+    } else {
+        trace_output_length
+    }
+}
+
 pub fn spawn_request_loop_with_timestamp<A: 'static + LLMApi + Send>(
     endpoint: String,
     dataset: Arc<Pin<Box<dyn LLMTrace>>>,
     token_sampler: Arc<TokenSampler>,
     scale_factor: f64,
-    ignore_trace_timestamp: bool,
+    sequential: bool,
     response_sender: flume::Sender<BTreeMap<String, String>>,
     interrupt_flag: Arc<AtomicBool>,
     ttft_slo: f32,
@@ -143,21 +150,22 @@ pub fn spawn_request_loop_with_timestamp<A: 'static + LLMApi + Send>(
             let response_sender = response_sender.clone();
 
             let curr_timestamp = get_timestamp() as u64;
-            let next_timestamp = if ignore_trace_timestamp {
+            let next_timestamp = if sequential {
                 curr_timestamp
             } else {
                 ((*dataset).timestamp(data_index) as f64 / scale_factor) as u64
             };
 
-            if !ignore_trace_timestamp && next_timestamp > curr_timestamp + 1 {
+            if !sequential && next_timestamp > curr_timestamp + 1 {
                 sleep(Duration::from_millis(next_timestamp - curr_timestamp)).await;
             }
 
             // Do not parse in another coroutine to avoid sync/async lock contention
-            let (prompt, input_length, output_length) =
+            let (prompt, input_length, trace_output_length) =
                 dataset.inflate(data_index, token_sampler.as_ref());
+            let output_length = effective_output_length(trace_output_length, sequential);
 
-            if ignore_trace_timestamp {
+            if sequential {
                 let json_body = A::request_json_body(prompt, output_length, stream);
                 let s_time = get_timestamp();
                 let s_time_drift = s_time - next_timestamp as f64;
@@ -596,6 +604,16 @@ mod tests {
     use std::sync::Arc;
     use tokenizers::Tokenizer;
     use tokio::fs::File;
+
+    #[test]
+    fn effective_output_length_forces_one_in_sequential_mode() {
+        assert_eq!(effective_output_length(128, true), 1);
+    }
+
+    #[test]
+    fn effective_output_length_preserves_trace_length_in_timestamped_mode() {
+        assert_eq!(effective_output_length(128, false), 128);
+    }
 
     #[tokio::test]
     async fn test_inflate_latency() {
