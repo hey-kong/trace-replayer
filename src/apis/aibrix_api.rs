@@ -3,8 +3,9 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 use std::time::Duration;
+use tokio::time::Instant as TokioInstant;
 
-use super::{LLMApi, RequestError, MODEL_NAME};
+use super::{LLMApi, MODEL_NAME, RequestError};
 
 #[derive(Copy, Clone)]
 pub struct AIBrixApi;
@@ -36,6 +37,7 @@ impl LLMApi for AIBrixApi {
         response: Response,
         _stream: bool,
         _timeout_duration: Duration,
+        _request_start: TokioInstant,
     ) -> Result<BTreeMap<String, String>, RequestError> {
         let mut result = BTreeMap::new();
 
