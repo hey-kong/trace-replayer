@@ -1,12 +1,12 @@
-use super::{LLMApi, RequestError, METRIC_PERCENTILES, MODEL_NAME};
+use super::{LLMApi, METRIC_PERCENTILES, MODEL_NAME, RequestError};
 use futures_util::TryStreamExt;
 use reqwest::Response;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::time::Duration;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    time::{timeout as tokio_timeout, Instant as TokioInstant},
+    time::{Instant as TokioInstant, timeout as tokio_timeout},
 };
 use tokio_util::io::StreamReader;
 
@@ -14,6 +14,25 @@ use tokio_util::io::StreamReader;
 pub struct OpenAIApi;
 
 const DEFAULT_PERCENTILES: [u32; 3] = [90, 95, 99];
+
+fn has_content_delta(data_str: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(data_str) else {
+        return false;
+    };
+
+    value
+        .get("choices")
+        .and_then(Value::as_array)
+        .is_some_and(|choices| {
+            choices.iter().any(|choice| {
+                choice
+                    .get("delta")
+                    .and_then(|delta| delta.get("content"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| !content.is_empty())
+            })
+        })
+}
 
 #[async_trait::async_trait]
 impl LLMApi for OpenAIApi {
@@ -40,6 +59,7 @@ impl LLMApi for OpenAIApi {
         response: Response,
         stream: bool,
         timeout_duration: Duration,
+        request_start: TokioInstant,
     ) -> Result<BTreeMap<String, String>, RequestError> {
         let mut result = BTreeMap::new();
         result.insert("status".to_string(), response.status().as_str().to_string());
@@ -64,13 +84,12 @@ impl LLMApi for OpenAIApi {
         let mut token_count = 0;
         let mut tbt_values: Vec<f64> = Vec::new();
         let mut tbt_except_first: Vec<f64> = Vec::new();
-        let start_time = TokioInstant::now();
 
         loop {
-            if start_time.elapsed() > timeout_duration {
+            if request_start.elapsed() > timeout_duration {
                 return Err(RequestError::Timeout);
             }
-            let remaining_duration = timeout_duration - start_time.elapsed();
+            let remaining_duration = timeout_duration - request_start.elapsed();
 
             let read_future = reader.read_line(&mut line);
             match tokio_timeout(remaining_duration, read_future).await {
@@ -88,14 +107,14 @@ impl LLMApi for OpenAIApi {
                         if data_str == "[DONE]" {
                             break;
                         }
-                        if data_str.contains(r#""delta""#) {
+                        if has_content_delta(data_str) {
                             let now = TokioInstant::now();
                             token_count += 1;
 
                             if first_token_time.is_none() {
                                 first_token_time = Some(now);
                                 let first_token_duration =
-                                    now.duration_since(start_time).as_secs_f64() * 1000.0;
+                                    now.duration_since(request_start).as_secs_f64() * 1000.0;
                                 result.insert(
                                     "first_token_time".to_string(),
                                     format!("{first_token_duration:.3}"),
@@ -126,10 +145,7 @@ impl LLMApi for OpenAIApi {
         }
 
         if !tbt_except_first.is_empty() {
-            let max_tbt_except_first = tbt_except_first
-                .iter()
-                .copied()
-                .fold(f64::MIN, f64::max);
+            let max_tbt_except_first = tbt_except_first.iter().copied().fold(f64::MIN, f64::max);
             result.insert(
                 "max_time_between_tokens_except_first".to_string(),
                 format!("{max_tbt_except_first:.3}"),
@@ -156,7 +172,8 @@ impl LLMApi for OpenAIApi {
         // need to sort for computing percentage
         if !tbt_values.is_empty() {
             let mut sorted_tbt = tbt_values.clone();
-            sorted_tbt.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            sorted_tbt
+                .sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
             let len = sorted_tbt.len();
             if len > 0 {

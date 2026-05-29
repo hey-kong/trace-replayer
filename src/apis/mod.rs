@@ -9,11 +9,12 @@ pub mod aibrix_api;
 pub mod openai_api;
 pub mod tgi_api;
 
-pub use aibrix_api::{AIBrixApi, AIBRIX_ROUTE_STRATEGY};
+pub use aibrix_api::{AIBRIX_ROUTE_STRATEGY, AIBrixApi};
 pub use openai_api::OpenAIApi;
 pub use tgi_api::TGIApi;
 
 use std::time::Duration;
+use tokio::time::Instant as TokioInstant;
 
 pub enum RequestError {
     Timeout,
@@ -29,5 +30,6 @@ pub trait LLMApi: Copy + Clone + Send + Sync {
         response: Response,
         stream: bool,
         timeout_duration: Duration,
+        request_start: TokioInstant,
     ) -> Result<BTreeMap<String, String>, RequestError>;
 }

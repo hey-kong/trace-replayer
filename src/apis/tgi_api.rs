@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 
 use reqwest::Response;
 
-use super::{LLMApi, RequestError, METRIC_PERCENTILES};
+use super::{LLMApi, METRIC_PERCENTILES, RequestError};
 use std::time::Duration;
+use tokio::time::Instant as TokioInstant;
 pub struct TGIApi;
 
 const DEFAULT_PERCENTILES: [u32; 3] = [90, 95, 99];
@@ -37,6 +38,7 @@ impl LLMApi for TGIApi {
         response: Response,
         _stream: bool,
         _timeout_duration: Duration,
+        _request_start: TokioInstant,
     ) -> Result<BTreeMap<String, String>, RequestError> {
         let mut map = BTreeMap::new();
         map.insert("status".to_string(), response.status().as_str().to_string());

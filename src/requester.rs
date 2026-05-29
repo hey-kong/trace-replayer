@@ -2,8 +2,8 @@ use std::{
     collections::BTreeMap,
     pin::Pin,
     sync::{
-        atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering},
         Arc, OnceLock,
+        atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -14,12 +14,12 @@ use tokio::{
     io::{AsyncWriteExt, BufWriter},
     spawn,
     task::JoinHandle,
-    time::sleep,
+    time::{Instant as TokioInstant, sleep},
 };
 
 use crate::apis::METRIC_PERCENTILES;
 use crate::{
-    apis::{LLMApi, RequestError, AIBRIX_ROUTE_STRATEGY},
+    apis::{AIBRIX_ROUTE_STRATEGY, LLMApi, RequestError},
     dataset::LLMTrace,
     timeout_secs_upon_slo,
     token_sampler::TokenSampler,
@@ -59,9 +59,10 @@ async fn post_with_timeout<A: 'static + LLMApi + Send>(
         );
     }
 
+    let request_start = TokioInstant::now();
     let response = req.send().await.map_err(|e| RequestError::Other(e))?;
 
-    A::parse_response(response, stream, timeout).await
+    A::parse_response(response, stream, timeout, request_start).await
 }
 
 async fn wait_all(handle_rx: flume::Receiver<JoinHandle<()>>, interrupt_flag: Arc<AtomicBool>) {
@@ -74,11 +75,7 @@ async fn wait_all(handle_rx: flume::Receiver<JoinHandle<()>>, interrupt_flag: Ar
 }
 
 fn effective_output_length(trace_output_length: u64, sequential: bool) -> u64 {
-    if sequential {
-        1
-    } else {
-        trace_output_length
-    }
+    if sequential { 1 } else { trace_output_length }
 }
 
 pub fn spawn_request_loop_with_timestamp<A: 'static + LLMApi + Send>(
@@ -110,11 +107,7 @@ pub fn spawn_request_loop_with_timestamp<A: 'static + LLMApi + Send>(
     let handle = spawn(async move {
         wait_all(rx, flag).await;
         let a = RETURNCODE.load(Ordering::Relaxed);
-        if a == 0 {
-            Ok(())
-        } else {
-            Err(a)
-        }
+        if a == 0 { Ok(()) } else { Err(a) }
     });
 
     let error_count = Arc::new(AtomicU32::new(0));
@@ -344,11 +337,7 @@ pub fn spawn_request_loop_debug<A: 'static + LLMApi + Send>(
     let handle = spawn(async move {
         wait_all(rx, flag).await;
         let a = RETURNCODE.load(Ordering::Relaxed);
-        if a == 0 {
-            Ok(())
-        } else {
-            Err(a)
-        }
+        if a == 0 { Ok(()) } else { Err(a) }
     });
 
     let validate_tokenizer = Arc::new(token_sampler.get_tokenizer());
