@@ -105,6 +105,8 @@ path/to/your/repo/target/release/client \
   --model-name <MODEL_NAME IN VLLM>
 ```
 
+Each hash ID represents one token block. By default, Bailian traces use a block size of `16` and Mooncake traces use a block size of `512`. For traces generated with a different block size, pass `--block-size <TOKENS>`.
+
 For a complete list of command-line arguments, please refer to  
 👉 [`docs/arguments.md`](docs/arguments.md)
 

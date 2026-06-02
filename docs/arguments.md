@@ -16,6 +16,13 @@ This document describes all command-line arguments supported by **Trace-Replayer
 | `--dataset-path`     | `Option<String>` | Path to the dataset file.                                                                                |
 
 
+## Dataset Options
+
+| Argument       | Type            | Default                                  | Description                                                                                                    |
+| -------------- | --------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `--block-size` | `Option<usize>` | `16` for `bailian`, `512` for `mooncake` | Number of tokens represented by each hash ID. Override this when replaying traces generated with another size. |
+
+
 ## Request Rate Control
 
 | Argument         | Type          | Default | Description                                                                                                                                                                                  |
