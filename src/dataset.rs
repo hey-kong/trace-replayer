@@ -88,14 +88,23 @@ pub trait LLMTrace: Send + Sync {
 //
 pub struct BailianDataset {
     items: Vec<BailianDataItem>,
+    block_size: usize,
     user_prompts: UnsafeCell<HashMap<u64, String>>,
     rwlock: SpinRwLock,
 }
 
 impl BailianDataset {
+    pub const DEFAULT_BLOCK_SIZE: usize = 16;
+
     pub fn new() -> Self {
+        Self::with_block_size(Self::DEFAULT_BLOCK_SIZE)
+    }
+
+    pub fn with_block_size(block_size: usize) -> Self {
+        assert!(block_size > 0, "block size must be greater than zero");
         Self {
             items: Vec::new(),
+            block_size,
             user_prompts: UnsafeCell::new(HashMap::new()),
             rwlock: SpinRwLock::new(),
         }
@@ -116,7 +125,10 @@ impl LLMTrace for BailianDataset {
     }
 
     fn iter(&self) -> DataIter {
-        DataIter { size: self.items.len(), index: AtomicUsize::new(0) }
+        DataIter {
+            size: self.items.len(),
+            index: AtomicUsize::new(0),
+        }
     }
 
     fn rps(&self) -> f64 {
@@ -131,17 +143,24 @@ impl LLMTrace for BailianDataset {
     #[instrument(skip_all, target = "inflate", fields(chat_id = index), level = Level::INFO)]
     fn inflate(&self, index: usize, ts: &TokenSampler) -> (String, u64, u64) {
         // NOTE: the last block hash may be hashed onto a partially filled block
-        const BLOCK_SIZE: usize = 16;
         unsafe {
             let data_item = self.items.get(index).unwrap();
-            let last_block_len =
-                (*data_item).input_length as usize - ((*data_item).hash_ids.len() - 1) * BLOCK_SIZE;
-            debug_assert!(last_block_len <= BLOCK_SIZE);
+            let last_block_len = (*data_item).input_length as usize
+                - ((*data_item).hash_ids.len() - 1) * self.block_size;
+            debug_assert!(last_block_len <= self.block_size);
 
-            let x = if last_block_len == BLOCK_SIZE { 0 } else { 1 };
+            let x = if last_block_len == self.block_size {
+                0
+            } else {
+                1
+            };
             let mut prompt =
                 String::with_capacity(usize::next_power_of_two((*data_item).input_length as usize));
-            for &hash_id in (*data_item).hash_ids.iter().take((*data_item).hash_ids.len() - x) {
+            for &hash_id in (*data_item)
+                .hash_ids
+                .iter()
+                .take((*data_item).hash_ids.len() - x)
+            {
                 // loop invariant: rwlock is free
                 self.rwlock.read_lock();
                 if let Some(s) = (&*self.user_prompts.get()).get(&hash_id) {
@@ -149,7 +168,7 @@ impl LLMTrace for BailianDataset {
                     self.rwlock.read_unlock();
                 } else {
                     self.rwlock.read_unlock();
-                    let s = ts.gen_string(BLOCK_SIZE);
+                    let s = ts.gen_string(self.block_size);
                     self.rwlock.write_lock();
                     if let Some(s0) = (*self.user_prompts.get()).get(&hash_id) {
                         prompt.push_str(&s0);
@@ -170,7 +189,11 @@ impl LLMTrace for BailianDataset {
                 self.rwlock.write_unlock();
             }
 
-            (prompt, (*data_item).input_length, (*data_item).output_length)
+            (
+                prompt,
+                (*data_item).input_length,
+                (*data_item).output_length,
+            )
         }
     }
 }
@@ -180,14 +203,23 @@ impl LLMTrace for BailianDataset {
 //
 pub struct MooncakeDataset {
     items: Vec<MooncakeDataItem>,
+    block_size: usize,
     user_prompts: UnsafeCell<HashMap<u64, String>>,
     rwlock: SpinRwLock,
 }
 
 impl MooncakeDataset {
+    pub const DEFAULT_BLOCK_SIZE: usize = 512;
+
     pub fn new() -> Self {
+        Self::with_block_size(Self::DEFAULT_BLOCK_SIZE)
+    }
+
+    pub fn with_block_size(block_size: usize) -> Self {
+        assert!(block_size > 0, "block size must be greater than zero");
         Self {
             items: Vec::new(),
+            block_size,
             user_prompts: UnsafeCell::new(HashMap::new()),
             rwlock: SpinRwLock::new(),
         }
@@ -207,7 +239,10 @@ impl LLMTrace for MooncakeDataset {
     }
 
     fn iter(&self) -> DataIter {
-        DataIter { size: self.items.len(), index: AtomicUsize::new(0) }
+        DataIter {
+            size: self.items.len(),
+            index: AtomicUsize::new(0),
+        }
     }
 
     fn rps(&self) -> f64 {
@@ -222,17 +257,24 @@ impl LLMTrace for MooncakeDataset {
 
     fn inflate(&self, index: usize, ts: &TokenSampler) -> (String, u64, u64) {
         // NOTE: the last block hash may be hashed onto a partially filled block
-        const BLOCK_SIZE: usize = 512;
         unsafe {
             let data_item = self.items.get(index).unwrap();
-            let last_block_len =
-                (*data_item).input_length as usize - ((*data_item).hash_ids.len() - 1) * BLOCK_SIZE;
-            debug_assert!(last_block_len <= BLOCK_SIZE);
+            let last_block_len = (*data_item).input_length as usize
+                - ((*data_item).hash_ids.len() - 1) * self.block_size;
+            debug_assert!(last_block_len <= self.block_size);
 
-            let x = if last_block_len == BLOCK_SIZE { 0 } else { 1 };
+            let x = if last_block_len == self.block_size {
+                0
+            } else {
+                1
+            };
             let mut prompt =
                 String::with_capacity(usize::next_power_of_two((*data_item).input_length as usize));
-            for &hash_id in (*data_item).hash_ids.iter().take((*data_item).hash_ids.len() - x) {
+            for &hash_id in (*data_item)
+                .hash_ids
+                .iter()
+                .take((*data_item).hash_ids.len() - x)
+            {
                 // loop invariant: rwlock is free
                 self.rwlock.read_lock();
                 if let Some(s) = (&*self.user_prompts.get()).get(&hash_id) {
@@ -240,7 +282,7 @@ impl LLMTrace for MooncakeDataset {
                     self.rwlock.read_unlock();
                 } else {
                     self.rwlock.read_unlock();
-                    let s = ts.gen_string(BLOCK_SIZE);
+                    let s = ts.gen_string(self.block_size);
                     self.rwlock.write_lock();
                     if let Some(s0) = (*self.user_prompts.get()).get(&hash_id) {
                         prompt.push_str(&s0);
@@ -262,7 +304,38 @@ impl LLMTrace for MooncakeDataset {
                 self.rwlock.write_unlock();
             }
 
-            (prompt, (*data_item).input_length, (*data_item).output_length)
+            (
+                prompt,
+                (*data_item).input_length,
+                (*data_item).output_length,
+            )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bailian_uses_default_block_size() {
+        assert_eq!(BailianDataset::new().block_size, 16);
+    }
+
+    #[test]
+    fn mooncake_uses_default_block_size() {
+        assert_eq!(MooncakeDataset::new().block_size, 512);
+    }
+
+    #[test]
+    fn datasets_accept_custom_block_sizes() {
+        assert_eq!(BailianDataset::with_block_size(32).block_size, 32);
+        assert_eq!(MooncakeDataset::with_block_size(256).block_size, 256);
+    }
+
+    #[test]
+    #[should_panic(expected = "block size must be greater than zero")]
+    fn datasets_reject_zero_block_size() {
+        BailianDataset::with_block_size(0);
     }
 }

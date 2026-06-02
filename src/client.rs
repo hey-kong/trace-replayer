@@ -19,6 +19,16 @@ use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::fmt::{self, format::FmtSpan};
 use tracing_subscriber::{prelude::*, Layer, Registry};
 
+fn parse_block_size(value: &str) -> Result<usize, String> {
+    let block_size = value
+        .parse::<usize>()
+        .map_err(|_| "block size must be a positive integer".to_string())?;
+    if block_size == 0 {
+        return Err("block size must be greater than zero".to_string());
+    }
+    Ok(block_size)
+}
+
 #[derive(Parser)]
 struct Args {
     /// Path to tokenizer file.
@@ -60,6 +70,10 @@ struct Args {
     /// Path to dataset file. This argument is required only when dataset_type is not "mock" or "uniform".
     #[clap(long, required = true)]
     dataset_path: Option<String>,
+
+    /// Number of tokens represented by each hash ID. Defaults to 16 for Bailian and 512 for Mooncake.
+    #[clap(long, value_parser = parse_block_size)]
+    block_size: Option<usize>,
 
     /// Scale factor for the request rate. It only takes effect when `replay_mode` is enabled.
     ///
@@ -132,6 +146,7 @@ async fn async_main(args: Args) -> Result<(), i32> {
         api,
         dataset,
         dataset_path,
+        block_size: requested_block_size,
         scale_factor,
         sequential,
         output_one,
@@ -182,8 +197,9 @@ async fn async_main(args: Args) -> Result<(), i32> {
 
     let dataset: Pin<Box<dyn LLMTrace>> = match dataset.to_lowercase().as_str() {
         "mooncake" => {
-            let mut dataset: Pin<Box<MooncakeDataset>> = Box::pin(MooncakeDataset::new());
-            block_size = 512;
+            block_size = requested_block_size.unwrap_or(MooncakeDataset::DEFAULT_BLOCK_SIZE);
+            let mut dataset: Pin<Box<MooncakeDataset>> =
+                Box::pin(MooncakeDataset::with_block_size(block_size));
             dataset.load(
                 dataset_path
                     .expect("A dataset path must be provided in replay mode!")
@@ -192,8 +208,8 @@ async fn async_main(args: Args) -> Result<(), i32> {
             dataset
         }
         "bailian" => {
-            let mut dataset = Box::pin(BailianDataset::new());
-            block_size = 16;
+            block_size = requested_block_size.unwrap_or(BailianDataset::DEFAULT_BLOCK_SIZE);
+            let mut dataset = Box::pin(BailianDataset::with_block_size(block_size));
             dataset.load(
                 dataset_path
                     .expect("A dataset path must be provided in replay mode!")
@@ -389,4 +405,22 @@ fn main() -> Result<(), i32> {
     .build()
     .unwrap()
     .block_on(async_main(args))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_block_size_accepts_positive_integer() {
+        assert_eq!(parse_block_size("32"), Ok(32));
+    }
+
+    #[test]
+    fn parse_block_size_rejects_zero() {
+        assert_eq!(
+            parse_block_size("0"),
+            Err("block size must be greater than zero".to_string())
+        );
+    }
 }
