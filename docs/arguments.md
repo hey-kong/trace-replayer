@@ -21,7 +21,8 @@ This document describes all command-line arguments supported by **Trace-Replayer
 | Argument         | Type          | Default | Description                                                                                                                                                                                  |
 | ---------------- | ------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--scale-factor` | `Option<f64>` | None    | Request rate scaling factor. For example, `2.0` maps **logical time** in the trace to **physical (wall-clock) time** at 2× speed, issuing more requests within the same wall-clock duration. |
-| `--sequential` | `bool` | `false` | Replay requests strictly one-by-one. In this mode, each request is sent only after the previous request finishes, trace timestamps are ignored, and trace `output_length` is forced to `1`. |
+| `--sequential` | `bool` | `false` | Replay requests strictly one-by-one. In this mode, each request is sent only after the previous request finishes and trace timestamps are ignored. |
+| `--output-one` | `bool` | `false` | Force trace `output_length` to `1`. This can be enabled independently of `--sequential`. |
 
 
 ## Concurrency & Runtime

@@ -74,8 +74,8 @@ async fn wait_all(handle_rx: flume::Receiver<JoinHandle<()>>, interrupt_flag: Ar
     }
 }
 
-fn effective_output_length(trace_output_length: u64, sequential: bool) -> u64 {
-    if sequential { 1 } else { trace_output_length }
+fn effective_output_length(trace_output_length: u64, output_one: bool) -> u64 {
+    if output_one { 1 } else { trace_output_length }
 }
 
 pub fn spawn_request_loop_with_timestamp<A: 'static + LLMApi + Send>(
@@ -84,6 +84,7 @@ pub fn spawn_request_loop_with_timestamp<A: 'static + LLMApi + Send>(
     token_sampler: Arc<TokenSampler>,
     scale_factor: f64,
     sequential: bool,
+    output_one: bool,
     response_sender: flume::Sender<BTreeMap<String, String>>,
     interrupt_flag: Arc<AtomicBool>,
     ttft_slo: f32,
@@ -156,7 +157,8 @@ pub fn spawn_request_loop_with_timestamp<A: 'static + LLMApi + Send>(
             // Do not parse in another coroutine to avoid sync/async lock contention
             let (prompt, input_length, trace_output_length) =
                 dataset.inflate(data_index, token_sampler.as_ref());
-            let output_length = effective_output_length(trace_output_length, sequential);
+            let output_length =
+                effective_output_length(trace_output_length, output_one);
 
             if sequential {
                 let json_body = A::request_json_body(prompt, output_length, stream);
@@ -595,12 +597,12 @@ mod tests {
     use tokio::fs::File;
 
     #[test]
-    fn effective_output_length_forces_one_in_sequential_mode() {
+    fn effective_output_length_forces_one_when_requested() {
         assert_eq!(effective_output_length(128, true), 1);
     }
 
     #[test]
-    fn effective_output_length_preserves_trace_length_in_timestamped_mode() {
+    fn effective_output_length_preserves_trace_length_by_default() {
         assert_eq!(effective_output_length(128, false), 128);
     }
 

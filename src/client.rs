@@ -69,9 +69,13 @@ struct Args {
 
     /// Replay requests sequentially.
     ///
-    /// When enabled, each request is sent only after the previous one finishes, and trace output_length is forced to 1.
+    /// When enabled, each request is sent only after the previous one finishes and trace timestamps are ignored.
     #[clap(long, default_value_t = false)]
     sequential: bool,
+
+    /// Force trace output_length to 1.
+    #[clap(long, default_value_t = false)]
+    output_one: bool,
 
     /// Output path.
     #[clap(long, short, default_value = "./log/output.jsonl")]
@@ -130,6 +134,7 @@ async fn async_main(args: Args) -> Result<(), i32> {
         dataset_path,
         scale_factor,
         sequential,
+        output_one,
         output_path,
         summary_path,
         tracing_path: _,
@@ -219,6 +224,7 @@ async fn async_main(args: Args) -> Result<(), i32> {
                 token_sampler,
                 scale_factor.unwrap(),
                 sequential,
+                output_one,
                 tx,
                 interrupt_flag.clone(),
                 ttft_slo,
@@ -263,6 +269,7 @@ async fn async_main(args: Args) -> Result<(), i32> {
                 token_sampler,
                 scale_factor.unwrap(),
                 sequential,
+                output_one,
                 tx,
                 interrupt_flag.clone(),
                 ttft_slo,
@@ -298,6 +305,7 @@ async fn async_main(args: Args) -> Result<(), i32> {
                 token_sampler,
                 scale_factor.unwrap(),
                 sequential,
+                output_one,
                 tx,
                 interrupt_flag.clone(),
                 ttft_slo,
